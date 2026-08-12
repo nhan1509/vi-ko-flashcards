@@ -47,13 +47,13 @@ export function AddCardForm({ topics }: { topics: Topic[] }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="max-w-xl space-y-4 rounded-2xl border border-line bg-card p-5">
+    <form onSubmit={onSubmit} className="max-w-xl space-y-4 rounded-2xl border border-line bg-card p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
       <label className="block space-y-1 text-sm">
         <span>Chủ đề</span>
         <select
           value={topicId}
           onChange={(e) => setTopicId(e.target.value)}
-          className="w-full rounded-md border border-line bg-bg px-3 py-2 outline-none ring-accent focus:ring-2"
+          className="w-full rounded-md border border-line bg-bg px-3 py-3 text-base outline-none ring-accent focus:ring-2 md:py-2 md:text-sm"
         >
           {topics.map((t) => (
             <option key={t.id} value={t.id}>
@@ -67,8 +67,9 @@ export function AddCardForm({ topics }: { topics: Topic[] }) {
         <input
           value={vi}
           onChange={(e) => setVi(e.target.value)}
-          className="w-full rounded-md border border-line bg-bg px-3 py-2 outline-none ring-accent focus:ring-2"
+          className="w-full rounded-md border border-line bg-bg px-3 py-3 text-base outline-none ring-accent focus:ring-2 md:py-2 md:text-sm"
           required
+          enterKeyHint="next"
         />
       </label>
       <label className="block space-y-1 text-sm">
@@ -76,8 +77,9 @@ export function AddCardForm({ topics }: { topics: Topic[] }) {
         <input
           value={ko}
           onChange={(e) => setKo(e.target.value)}
-          className="ko w-full rounded-md border border-line bg-bg px-3 py-2 outline-none ring-accent focus:ring-2"
+          className="ko w-full rounded-md border border-line bg-bg px-3 py-3 text-base outline-none ring-accent focus:ring-2 md:py-2 md:text-sm"
           required
+          enterKeyHint="next"
         />
       </label>
       <label className="block space-y-1 text-sm">
@@ -85,16 +87,17 @@ export function AddCardForm({ topics }: { topics: Topic[] }) {
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          className="w-full rounded-md border border-line bg-bg px-3 py-2 outline-none ring-accent focus:ring-2"
+          className="w-full rounded-md border border-line bg-bg px-3 py-3 text-base outline-none ring-accent focus:ring-2 md:py-2 md:text-sm"
+          enterKeyHint="done"
         />
       </label>
       {error && <p className="text-sm text-danger">{error}</p>}
       {message && <p className="text-sm text-good">{message}</p>}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
         <button
           type="submit"
           disabled={pending}
-          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+          className="min-h-12 rounded-md bg-accent px-4 py-3 text-sm font-medium text-white disabled:opacity-60"
         >
           Lưu & thêm tiếp
         </button>
@@ -102,7 +105,7 @@ export function AddCardForm({ topics }: { topics: Topic[] }) {
           type="button"
           disabled={pending}
           onClick={() => save(false)}
-          className="rounded-md border border-line px-4 py-2 text-sm hover:bg-accent-soft disabled:opacity-60"
+          className="min-h-12 rounded-md border border-line px-4 py-3 text-sm hover:bg-accent-soft disabled:opacity-60"
         >
           Chỉ lưu
         </button>

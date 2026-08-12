@@ -23,21 +23,13 @@ export default async function StudyPage({
   ]);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-semibold">Phiên học SRS</h1>
-        <p className="mt-1 text-muted">
-          Thẻ được xáo trộn. Chấm Again / Hard / Good / Easy để lên lịch ôn.
-        </p>
-      </div>
-      <StudySession
-        key={sessionKey}
-        cards={cards}
-        topics={topics}
-        initialTopicId={params.topic}
-        initialOnlyDue={onlyDue}
-        initialDirection={direction}
-      />
-    </div>
+    <StudySession
+      key={sessionKey}
+      cards={cards}
+      topics={topics}
+      initialTopicId={params.topic}
+      initialOnlyDue={onlyDue}
+      initialDirection={direction}
+    />
   );
 }
