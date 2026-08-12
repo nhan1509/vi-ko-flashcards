@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Flashcard Việt–Hàn (SRS)
 
-## Getting Started
+Ứng dụng web học từ vựng Việt ↔ Hàn cho một người dùng: chủ đề, xáo trộn, SRS (Again/Hard/Good/Easy), thêm từ thủ công, import CSV/TSV/Excel, mật khẩu bảo vệ nhẹ.
 
-First, run the development server:
+## Chạy local
 
 ```bash
+cd Documents/vi-ko-flashcards
+npm install
+npm run db:push
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Mở http://localhost:3000 — mật khẩu mặc định: `flashcard`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+File mẫu import: [sample-words.csv](sample-words.csv)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Biến môi trường
 
-## Learn More
+| Biến | Mô tả |
+|------|--------|
+| `DATABASE_URL` | SQLite local: `file:./prisma/dev.db` |
+| `APP_PASSWORD` | Mật khẩu vào app. Để trống `""` nếu muốn tắt login |
+| `SESSION_SECRET` | Chuỗi bí mật ký cookie phiên |
 
-To learn more about Next.js, take a look at the following resources:
+## Import
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Cột: `vi,ko,topic,note`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```csv
+vi,ko,topic,note
+xin chào,안녕하세요,Chào hỏi,
+cảm ơn,감사합니다,Chào hỏi,lịch sự
+```
 
-## Deploy on Vercel
+Có thể dán từ Google Sheets / Excel (tab-separated) hoặc upload `.xlsx`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Deploy lên internet (không cần VPS)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+SQLite file **không** bền trên Vercel. Dùng **Turso** (SQLite cloud, free tier) hoặc đổi sang Neon Postgres.
+
+### Cách khuyến nghị: Vercel + Turso
+
+1. Tạo DB miễn phí tại [turso.tech](https://turso.tech)
+2. Lấy URL dạng `libsql://...` và `TURSO_AUTH_TOKEN`
+3. Đổi `src/lib/prisma.ts` sang adapter `@prisma/adapter-libsql` (xem comment trong file hoặc hướng dẫn Turso + Prisma)
+4. Push schema: `DATABASE_URL="libsql://..." TURSO_AUTH_TOKEN="..." npx prisma db push`
+5. Deploy lên [vercel.com](https://vercel.com): import repo, set env `DATABASE_URL`, `TURSO_AUTH_TOKEN`, `APP_PASSWORD`, `SESSION_SECRET`
+
+### Neon (Postgres)
+
+Nếu muốn Neon: đổi `provider` trong `prisma/schema.prisma` thành `postgresql`, dùng `@prisma/adapter-neon`, set `DATABASE_URL` Neon, rồi `prisma db push`.
+
+## Stack
+
+Next.js · Tailwind · Prisma · SQLite (local) · SM-2 SRS · Web Speech API (`ko-KR`)
