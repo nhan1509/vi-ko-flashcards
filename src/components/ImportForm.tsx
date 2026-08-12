@@ -1,10 +1,19 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useRef, useState } from "react";
 import { parseCsvOrTsv, parseExcelBuffer, type ImportRow } from "@/lib/import-parse";
 import { importCards } from "@/lib/actions";
 
 type Notice = { type: "success" | "error" | "info"; text: string };
+
+function friendlyError(err: unknown): string {
+  if (!(err instanceof Error)) return "Import thất bại. Thử lại sau.";
+  const msg = err.message || "";
+  if (msg.includes("#441") || msg.includes("Server Components")) {
+    return "Lỗi ghi dữ liệu trên server (Turso/Vercel). Kiểm tra biến môi trường DATABASE_URL và TURSO_AUTH_TOKEN, rồi thử lại.";
+  }
+  return msg;
+}
 
 export function ImportForm() {
   const [text, setText] = useState(
@@ -13,7 +22,7 @@ export function ImportForm() {
   const [preview, setPreview] = useState<ImportRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [pending, startTransition] = useTransition();
+  const [pending, setPending] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function runParseText() {
@@ -97,32 +106,33 @@ export function ImportForm() {
     }
   }
 
-  function onImport() {
+  async function onImport() {
     if (preview.length === 0) {
       setNotice({ type: "error", text: "Chưa có dữ liệu để import. Hãy xem trước hoặc chọn file." });
       return;
     }
     const count = preview.length;
-    startTransition(async () => {
-      try {
-        const { created } = await importCards(preview);
-        setPreview([]);
-        setErrors([]);
-        setNotice({
-          type: "success",
-          text: `Import thành công: đã thêm ${created}/${count} thẻ.`,
-        });
-        if (fileInputRef.current) fileInputRef.current.value = "";
-      } catch (err) {
-        setNotice({
-          type: "error",
-          text:
-            err instanceof Error
-              ? `Import thất bại: ${err.message}`
-              : "Import thất bại. Thử lại sau.",
-        });
+    const rows = preview;
+    setPending(true);
+    setNotice({ type: "info", text: `Đang import ${count} thẻ…` });
+    try {
+      const result = await importCards(rows);
+      if (!result.ok) {
+        setNotice({ type: "error", text: `Import thất bại: ${result.error}` });
+        return;
       }
-    });
+      setPreview([]);
+      setErrors([]);
+      setNotice({
+        type: "success",
+        text: `Import thành công: đã thêm ${result.created}/${count} thẻ.`,
+      });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (err) {
+      setNotice({ type: "error", text: `Import thất bại: ${friendlyError(err)}` });
+    } finally {
+      setPending(false);
+    }
   }
 
   return (
@@ -196,7 +206,7 @@ export function ImportForm() {
         <button
           type="button"
           disabled={pending || preview.length === 0}
-          onClick={onImport}
+          onClick={() => void onImport()}
           className="min-h-11 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
           {pending ? "Đang import…" : `Import${preview.length > 0 ? ` (${preview.length})` : ""}`}

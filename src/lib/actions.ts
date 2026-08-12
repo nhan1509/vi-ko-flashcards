@@ -210,58 +210,83 @@ export async function revalidateStudyRelated() {
   revalidatePath("/cards");
 }
 
-export async function importCards(rows: ImportRow[]) {
-  const topicCache = new Map<string, string>();
-  const uniqueTopics = [...new Set(rows.map((r) => r.topic.trim()).filter(Boolean))];
+export async function importCards(
+  rows: ImportRow[],
+): Promise<{ ok: true; created: number } | { ok: false; error: string }> {
+  if (!rows.length) {
+    return { ok: false, error: "Không có dòng nào để import." };
+  }
 
-  await Promise.all(
-    uniqueTopics.map(async (topicName) => {
+  try {
+    const topicCache = new Map<string, string>();
+    const uniqueTopics = [
+      ...new Set(rows.map((r) => r.topic.trim()).filter(Boolean)),
+    ];
+
+    if (uniqueTopics.length === 0) {
+      return { ok: false, error: "Thiếu cột topic. Mỗi dòng cần có chủ đề." };
+    }
+
+    for (const topicName of uniqueTopics) {
       const topic = await prisma.topic.upsert({
         where: { name: topicName },
         create: { name: topicName },
         update: {},
       });
       topicCache.set(topicName, topic.id);
-    }),
-  );
+    }
 
-  const review = defaultReviewState();
-  const chunkSize = 25;
-  let created = 0;
+    let created = 0;
 
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const chunk = rows.slice(i, i + chunkSize);
-    await prisma.$transaction(
-      chunk.map((row) => {
-        const topicId = topicCache.get(row.topic.trim());
-        if (!topicId) {
-          throw new Error(`Thiếu chủ đề cho thẻ: ${row.vi}`);
-        }
-        return prisma.card.create({
-          data: {
-            vi: row.vi.trim(),
-            ko: row.ko.trim(),
-            note: row.note?.trim() || null,
-            topicId,
-            review: {
-              create: {
-                ease: review.ease,
-                intervalDays: review.intervalDays,
-                repetitions: review.repetitions,
-                dueAt: review.dueAt,
-                status: review.status,
-              },
+    // Avoid interactive $transaction — not reliable with Turso/libsql adapter on Vercel.
+    for (const row of rows) {
+      const topicId = topicCache.get(row.topic.trim());
+      if (!topicId) {
+        return {
+          ok: false,
+          error: `Thiếu chủ đề cho thẻ “${row.vi}”. Đã lưu ${created} thẻ trước đó.`,
+        };
+      }
+
+      const review = defaultReviewState();
+      await prisma.card.create({
+        data: {
+          vi: row.vi.trim(),
+          ko: row.ko.trim(),
+          note: row.note?.trim() || null,
+          topicId,
+          review: {
+            create: {
+              ease: review.ease,
+              intervalDays: review.intervalDays,
+              repetitions: review.repetitions,
+              dueAt: review.dueAt,
+              status: review.status,
             },
           },
-        });
-      }),
-    );
-    created += chunk.length;
-  }
+        },
+      });
+      created += 1;
+    }
 
-  revalidatePath("/");
-  revalidatePath("/cards");
-  revalidatePath("/topics");
-  revalidatePath("/study");
-  return { created };
+    try {
+      revalidatePath("/");
+      revalidatePath("/cards");
+      revalidatePath("/topics");
+      revalidatePath("/study");
+    } catch (revalidateErr) {
+      console.error("[importCards] revalidate failed", revalidateErr);
+    }
+    return { ok: true, created };
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Lỗi không xác định khi ghi database.";
+    console.error("[importCards]", err);
+    return {
+      ok: false,
+      error: message.includes("Server Components")
+        ? "Không ghi được database (Turso). Kiểm tra DATABASE_URL / TURSO_AUTH_TOKEN trên Vercel."
+        : message,
+    };
+  }
 }
