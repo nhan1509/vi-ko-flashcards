@@ -9,14 +9,8 @@ export default async function CardsPage({
   searchParams: Promise<{ topic?: string; status?: string; q?: string }>;
 }) {
   const params = await searchParams;
-  const [cards, topics] = await Promise.all([
-    listCards({
-      topicId: params.topic,
-      status: params.status,
-      search: params.q,
-    }),
-    listTopics(),
-  ]);
+  // Load once; filter client-side for snappy mobile UX
+  const [cards, topics] = await Promise.all([listCards(), listTopics()]);
 
   return (
     <div className="space-y-6">

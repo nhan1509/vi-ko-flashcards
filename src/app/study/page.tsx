@@ -11,7 +11,7 @@ export default async function StudyPage({
   const params = await searchParams;
   const onlyDue = params.due !== "0";
   const direction = params.dir === "vi-ko" ? "vi-ko" : "ko-vi";
-  const sessionKey = `${params.topic ?? "all"}-${onlyDue ? "due" : "all"}-${direction}-${params.r ?? "0"}`;
+  const sessionKey = `${params.topic ?? "all"}-${onlyDue ? "due" : "all"}-${params.r ?? "0"}`;
 
   const [cards, topics] = await Promise.all([
     getStudyCards({

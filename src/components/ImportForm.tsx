@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { parseCsvOrTsv, parseExcelBuffer, type ImportRow } from "@/lib/import-parse";
 import { importCards } from "@/lib/actions";
+
+type Notice = { type: "success" | "error" | "info"; text: string };
 
 export function ImportForm() {
   const [text, setText] = useState(
@@ -10,31 +12,116 @@ export function ImportForm() {
   );
   const [preview, setPreview] = useState<ImportRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
-  const [message, setMessage] = useState("");
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, startTransition] = useTransition();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   function runParseText() {
-    const result = parseCsvOrTsv(text);
-    setPreview(result.rows);
-    setErrors(result.errors);
-    setMessage("");
+    try {
+      const result = parseCsvOrTsv(text);
+      setPreview(result.rows);
+      setErrors(result.errors);
+      if (result.rows.length === 0) {
+        setNotice({
+          type: "error",
+          text: result.errors[0] ?? "Không đọc được dòng hợp lệ từ nội dung đã dán.",
+        });
+      } else {
+        setNotice({
+          type: "info",
+          text: `Xem trước ${result.rows.length} thẻ${result.errors.length ? ` · ${result.errors.length} cảnh báo` : ""}. Bấm Import để lưu.`,
+        });
+      }
+    } catch (err) {
+      setPreview([]);
+      setErrors([]);
+      setNotice({
+        type: "error",
+        text: err instanceof Error ? err.message : "Phân tích CSV thất bại.",
+      });
+    }
   }
 
-  async function onExcel(file: File | null) {
-    if (!file) return;
-    const buffer = await file.arrayBuffer();
-    const result = parseExcelBuffer(buffer);
-    setPreview(result.rows);
-    setErrors(result.errors);
-    setMessage(`Đã đọc ${file.name}`);
+  async function onExcel(file: File) {
+    try {
+      const buffer = await file.arrayBuffer();
+      const result = parseExcelBuffer(buffer);
+      setPreview(result.rows);
+      setErrors(result.errors);
+      if (result.rows.length === 0) {
+        setNotice({
+          type: "error",
+          text: `File “${file.name}” không có dòng hợp lệ.${result.errors[0] ? ` ${result.errors[0]}` : ""}`,
+        });
+      } else {
+        setNotice({
+          type: "info",
+          text: `Đã đọc “${file.name}”: ${result.rows.length} thẻ sẵn sàng import.`,
+        });
+      }
+    } catch (err) {
+      setPreview([]);
+      setErrors([]);
+      setNotice({
+        type: "error",
+        text: err instanceof Error ? `Không đọc được Excel: ${err.message}` : "Đọc Excel thất bại.",
+      });
+    }
+  }
+
+  async function onCsvFile(file: File) {
+    try {
+      const content = await file.text();
+      setText(content);
+      const result = parseCsvOrTsv(content);
+      setPreview(result.rows);
+      setErrors(result.errors);
+      if (result.rows.length === 0) {
+        setNotice({
+          type: "error",
+          text: `File “${file.name}” không có dòng hợp lệ.${result.errors[0] ? ` ${result.errors[0]}` : ""}`,
+        });
+      } else {
+        setNotice({
+          type: "info",
+          text: `Đã đọc “${file.name}”: ${result.rows.length} thẻ sẵn sàng import.`,
+        });
+      }
+    } catch (err) {
+      setPreview([]);
+      setErrors([]);
+      setNotice({
+        type: "error",
+        text: err instanceof Error ? `Không đọc được CSV: ${err.message}` : "Đọc CSV thất bại.",
+      });
+    }
   }
 
   function onImport() {
-    if (preview.length === 0) return;
+    if (preview.length === 0) {
+      setNotice({ type: "error", text: "Chưa có dữ liệu để import. Hãy xem trước hoặc chọn file." });
+      return;
+    }
+    const count = preview.length;
     startTransition(async () => {
-      const { created } = await importCards(preview);
-      setMessage(`Đã import ${created} thẻ`);
-      setPreview([]);
+      try {
+        const { created } = await importCards(preview);
+        setPreview([]);
+        setErrors([]);
+        setNotice({
+          type: "success",
+          text: `Import thành công: đã thêm ${created}/${count} thẻ.`,
+        });
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      } catch (err) {
+        setNotice({
+          type: "error",
+          text:
+            err instanceof Error
+              ? `Import thất bại: ${err.message}`
+              : "Import thất bại. Thử lại sau.",
+        });
+      }
     });
   }
 
@@ -47,6 +134,28 @@ export function ImportForm() {
           sheet đầu.
         </p>
       </div>
+
+      {notice && (
+        <div
+          role="status"
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            notice.type === "success"
+              ? "border-good/30 bg-green-50 text-good"
+              : notice.type === "error"
+                ? "border-danger/30 bg-red-50 text-danger"
+                : "border-accent/30 bg-accent-soft text-ink"
+          }`}
+        >
+          <p className="font-medium">
+            {notice.type === "success"
+              ? "Hoàn thành"
+              : notice.type === "error"
+                ? "Thất bại"
+                : "Thông báo"}
+          </p>
+          <p className="mt-1">{notice.text}</p>
+        </div>
+      )}
 
       <label className="block space-y-2 text-sm">
         <span>Dán CSV / TSV</span>
@@ -62,13 +171,14 @@ export function ImportForm() {
         <button
           type="button"
           onClick={runParseText}
-          className="rounded-md border border-line bg-card px-4 py-2 text-sm hover:bg-accent-soft"
+          className="min-h-11 rounded-md border border-line bg-card px-4 py-2 text-sm hover:bg-accent-soft"
         >
           Xem trước
         </button>
-        <label className="cursor-pointer rounded-md border border-line bg-card px-4 py-2 text-sm hover:bg-accent-soft">
+        <label className="flex min-h-11 cursor-pointer items-center rounded-md border border-line bg-card px-4 py-2 text-sm hover:bg-accent-soft">
           Chọn Excel / CSV
           <input
+            ref={fileInputRef}
             type="file"
             accept=".csv,.xlsx,.xls,.tsv,text/csv"
             className="hidden"
@@ -76,12 +186,7 @@ export function ImportForm() {
               const file = e.target.files?.[0] ?? null;
               if (!file) return;
               if (file.name.endsWith(".csv") || file.name.endsWith(".tsv")) {
-                file.text().then((content) => {
-                  setText(content);
-                  const result = parseCsvOrTsv(content);
-                  setPreview(result.rows);
-                  setErrors(result.errors);
-                });
+                void onCsvFile(file);
               } else {
                 void onExcel(file);
               }
@@ -92,13 +197,12 @@ export function ImportForm() {
           type="button"
           disabled={pending || preview.length === 0}
           onClick={onImport}
-          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+          className="min-h-11 rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
         >
-          Import {preview.length > 0 ? `(${preview.length})` : ""}
+          {pending ? "Đang import…" : `Import${preview.length > 0 ? ` (${preview.length})` : ""}`}
         </button>
       </div>
 
-      {message && <p className="text-sm text-good">{message}</p>}
       {errors.length > 0 && (
         <ul className="rounded-md border border-warn/30 bg-orange-50 p-3 text-sm text-warn">
           {errors.slice(0, 8).map((err) => (

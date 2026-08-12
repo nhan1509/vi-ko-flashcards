@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
-import { deleteCard, updateCard } from "@/lib/actions";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { deleteAllCards, deleteCard, updateCard } from "@/lib/actions";
 import { haptic } from "@/lib/haptics";
 
 type CardRow = {
@@ -19,7 +18,7 @@ type CardRow = {
 type Topic = { id: string; name: string };
 
 export function CardsTable({
-  cards,
+  cards: allCards,
   topics,
   initialTopicId,
   initialStatus,
@@ -31,28 +30,56 @@ export function CardsTable({
   initialStatus?: string;
   initialSearch?: string;
 }) {
-  const router = useRouter();
   const [topicId, setTopicId] = useState(initialTopicId ?? "");
   const [status, setStatus] = useState(initialStatus ?? "");
   const [search, setSearch] = useState(initialSearch ?? "");
+  const [rows, setRows] = useState(allCards);
   const [pending, startTransition] = useTransition();
   const [editing, setEditing] = useState<string | null>(null);
-  const filterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function pushFilters(next?: { topicId?: string; status?: string; search?: string }) {
-    const params = new URLSearchParams();
-    const t = next?.topicId ?? topicId;
-    const s = next?.status ?? status;
-    const q = next?.search ?? search;
-    if (t) params.set("topic", t);
-    if (s) params.set("status", s);
-    if (q.trim()) params.set("q", q.trim());
-    router.push(`/cards?${params.toString()}`);
+  useEffect(() => {
+    setRows(allCards);
+  }, [allCards]);
+
+  const cards = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter((card) => {
+      if (topicId && card.topicId !== topicId) return false;
+      if (status && (card.review?.status ?? "new") !== status) return false;
+      if (!q) return true;
+      return (
+        card.vi.toLowerCase().includes(q) ||
+        card.ko.toLowerCase().includes(q) ||
+        (card.note?.toLowerCase().includes(q) ?? false)
+      );
+    });
+  }, [rows, topicId, status, search]);
+
+  function removeLocal(id: string) {
+    setRows((prev) => prev.filter((c) => c.id !== id));
   }
 
-  function scheduleFilters(next: { topicId?: string; status?: string; search?: string }) {
-    if (filterTimer.current) clearTimeout(filterTimer.current);
-    filterTimer.current = setTimeout(() => pushFilters(next), 320);
+  function applyLocalUpdate(data: {
+    id: string;
+    topicId: string;
+    vi: string;
+    ko: string;
+    note?: string;
+  }) {
+    setRows((prev) =>
+      prev.map((c) =>
+        c.id === data.id
+          ? {
+              ...c,
+              vi: data.vi,
+              ko: data.ko,
+              note: data.note ?? null,
+              topicId: data.topicId,
+              topic: topics.find((t) => t.id === data.topicId) ?? c.topic,
+            }
+          : c,
+      ),
+    );
   }
 
   return (
@@ -62,11 +89,7 @@ export function CardsTable({
           <span>Chủ đề</span>
           <select
             value={topicId}
-            onChange={(e) => {
-              const v = e.target.value;
-              setTopicId(v);
-              scheduleFilters({ topicId: v });
-            }}
+            onChange={(e) => setTopicId(e.target.value)}
             className="w-full rounded-md border border-line bg-bg px-3 py-2.5 text-base md:text-sm"
           >
             <option value="">Tất cả</option>
@@ -81,11 +104,7 @@ export function CardsTable({
           <span>Trạng thái</span>
           <select
             value={status}
-            onChange={(e) => {
-              const v = e.target.value;
-              setStatus(v);
-              scheduleFilters({ status: v });
-            }}
+            onChange={(e) => setStatus(e.target.value)}
             className="w-full rounded-md border border-line bg-bg px-3 py-2.5 text-base md:text-sm"
           >
             <option value="">Tất cả</option>
@@ -99,11 +118,7 @@ export function CardsTable({
           <span>Tìm</span>
           <input
             value={search}
-            onChange={(e) => {
-              const v = e.target.value;
-              setSearch(v);
-              scheduleFilters({ search: v });
-            }}
+            onChange={(e) => setSearch(e.target.value)}
             className="w-full rounded-md border border-line bg-bg px-3 py-2.5 text-base md:text-sm"
             placeholder="vi / ko / note"
           />
@@ -114,9 +129,29 @@ export function CardsTable({
         >
           Thêm từ
         </Link>
+        <button
+          type="button"
+          disabled={pending}
+          className="min-h-11 rounded-md border border-danger/40 px-4 py-2.5 text-sm text-danger hover:bg-red-50 disabled:opacity-50"
+          onClick={() => {
+            if (!confirm("Xóa TẤT CẢ từ vựng trong ứng dụng? Hành động không hoàn tác.")) {
+              return;
+            }
+            if (!confirm("Xác nhận lần nữa: xóa hết mọi thẻ?")) return;
+            setRows([]);
+            startTransition(async () => {
+              await deleteAllCards();
+            });
+          }}
+        >
+          Xóa tất cả
+        </button>
       </div>
 
-      {/* Mobile list */}
+      <p className="text-xs text-muted">
+        Hiển thị {cards.length}/{rows.length} thẻ
+      </p>
+
       <ul className="space-y-2 md:hidden">
         {cards.map((card) =>
           editing === card.id ? (
@@ -127,9 +162,10 @@ export function CardsTable({
                 pending={pending}
                 onCancel={() => setEditing(null)}
                 onSave={(data) => {
+                  applyLocalUpdate(data);
+                  setEditing(null);
                   startTransition(async () => {
                     await updateCard(data);
-                    setEditing(null);
                   });
                 }}
               />
@@ -142,6 +178,7 @@ export function CardsTable({
               onDelete={() => {
                 if (confirm("Xóa thẻ này?")) {
                   haptic(20);
+                  removeLocal(card.id);
                   startTransition(async () => {
                     await deleteCard(card.id);
                   });
@@ -157,7 +194,6 @@ export function CardsTable({
         )}
       </ul>
 
-      {/* Desktop table */}
       <div className="hidden overflow-x-auto rounded-xl border border-line bg-card md:block">
         <table className="min-w-full text-left text-sm">
           <thead className="border-b border-line bg-bg-accent/60 text-muted">
@@ -180,9 +216,10 @@ export function CardsTable({
                       pending={pending}
                       onCancel={() => setEditing(null)}
                       onSave={(data) => {
+                        applyLocalUpdate(data);
+                        setEditing(null);
                         startTransition(async () => {
                           await updateCard(data);
-                          setEditing(null);
                         });
                       }}
                     />
@@ -211,6 +248,7 @@ export function CardsTable({
                           className="text-danger hover:underline"
                           onClick={() => {
                             if (confirm("Xóa thẻ này?")) {
+                              removeLocal(card.id);
                               startTransition(async () => {
                                 await deleteCard(card.id);
                               });
@@ -248,12 +286,68 @@ function SwipeCardRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const startX = useRef<number | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const start = useRef<{ x: number; y: number; base: number } | null>(null);
+  const axis = useRef<"h" | "v" | null>(null);
   const [offset, setOffset] = useState(0);
+  const offsetRef = useRef(0);
+  offsetRef.current = offset;
   const open = offset < -56;
 
+  useEffect(() => {
+    const el = surfaceRef.current;
+    if (!el) return;
+
+    const onStart = (e: TouchEvent) => {
+      const t = e.changedTouches[0];
+      start.current = {
+        x: t.clientX,
+        y: t.clientY,
+        base: offsetRef.current < -56 ? -128 : 0,
+      };
+      axis.current = null;
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (!start.current) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - start.current.x;
+      const dy = t.clientY - start.current.y;
+      if (!axis.current) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        axis.current = Math.abs(dx) > Math.abs(dy) * 1.15 ? "h" : "v";
+      }
+      if (axis.current !== "h") return;
+      e.preventDefault();
+      setOffset(Math.max(Math.min(start.current.base + dx, 0), -128));
+    };
+
+    const onEnd = () => {
+      const wasH = axis.current === "h";
+      start.current = null;
+      axis.current = null;
+      if (!wasH) return;
+      setOffset((o) => {
+        const next = o < -64 ? -128 : 0;
+        if (next === -128) haptic(8);
+        return next;
+      });
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, []);
+
   return (
-    <li className="relative overflow-hidden rounded-xl border border-line bg-card">
+    <li className="relative overflow-hidden overscroll-x-none rounded-xl border border-line bg-card">
       <div className="absolute inset-y-0 right-0 flex">
         <button
           type="button"
@@ -271,22 +365,11 @@ function SwipeCardRow({
         </button>
       </div>
       <div
-        className="relative bg-card px-4 py-3 transition-transform"
-        style={{ transform: `translateX(${Math.max(Math.min(offset, 0), -128)}px)` }}
-        onTouchStart={(e) => {
-          startX.current = e.changedTouches[0].clientX;
-        }}
-        onTouchMove={(e) => {
-          if (startX.current == null) return;
-          setOffset(e.changedTouches[0].clientX - startX.current + (open ? -128 : 0));
-        }}
-        onTouchEnd={() => {
-          startX.current = null;
-          setOffset((o) => {
-            const next = o < -64 ? -128 : 0;
-            if (next === -128) haptic(8);
-            return next;
-          });
+        ref={surfaceRef}
+        className="relative touch-pan-y bg-card px-4 py-3 will-change-transform"
+        style={{
+          transform: `translate3d(${Math.max(Math.min(offset, 0), -128)}px,0,0)`,
+          transition: start.current ? "none" : "transform 0.18s ease-out",
         }}
         onClick={() => {
           if (open) setOffset(0);

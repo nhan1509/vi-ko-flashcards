@@ -8,16 +8,27 @@ export function getSessionCookieName() {
   return COOKIE_NAME;
 }
 
+const keyCache = new Map<string, Promise<CryptoKey>>();
+
+function getHmacKey(secret: string): Promise<CryptoKey> {
+  let cached = keyCache.get(secret);
+  if (!cached) {
+    const enc = new TextEncoder();
+    cached = crypto.subtle.importKey(
+      "raw",
+      enc.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    keyCache.set(secret, cached);
+  }
+  return cached;
+}
+
 async function hmacHex(message: string, secret: string): Promise<string> {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  const key = await getHmacKey(secret);
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
   return Array.from(new Uint8Array(sig))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");

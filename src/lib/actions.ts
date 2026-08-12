@@ -81,7 +81,6 @@ export async function createCard(input: {
   });
   revalidatePath("/");
   revalidatePath("/cards");
-  revalidatePath("/study");
 }
 
 export async function updateCard(input: {
@@ -101,14 +100,21 @@ export async function updateCard(input: {
     },
   });
   revalidatePath("/cards");
-  revalidatePath("/study");
 }
 
 export async function deleteCard(id: string) {
   await prisma.card.delete({ where: { id } });
   revalidatePath("/");
   revalidatePath("/cards");
+}
+
+export async function deleteAllCards() {
+  const result = await prisma.card.deleteMany();
+  revalidatePath("/");
+  revalidatePath("/cards");
   revalidatePath("/study");
+  revalidatePath("/topics");
+  return { deleted: result.count };
 }
 
 export async function listCards(filters?: {
@@ -194,48 +200,63 @@ export async function reviewCard(cardId: string, grade: SrsGrade) {
     },
   });
 
-  revalidatePath("/");
-  revalidatePath("/study");
-  revalidatePath("/cards");
+  // Skip revalidatePath here — study UI is client-owned; avoids RSC refetch lag per grade.
   return next;
 }
 
-export async function importCards(rows: ImportRow[]) {
-  let created = 0;
-  const topicCache = new Map<string, string>();
+/** Call when leaving a study session so dashboard counts refresh. */
+export async function revalidateStudyRelated() {
+  revalidatePath("/");
+  revalidatePath("/cards");
+}
 
-  for (const row of rows) {
-    const topicName = row.topic.trim();
-    let topicId = topicCache.get(topicName);
-    if (!topicId) {
+export async function importCards(rows: ImportRow[]) {
+  const topicCache = new Map<string, string>();
+  const uniqueTopics = [...new Set(rows.map((r) => r.topic.trim()).filter(Boolean))];
+
+  await Promise.all(
+    uniqueTopics.map(async (topicName) => {
       const topic = await prisma.topic.upsert({
         where: { name: topicName },
         create: { name: topicName },
         update: {},
       });
-      topicId = topic.id;
-      topicCache.set(topicName, topicId);
-    }
+      topicCache.set(topicName, topic.id);
+    }),
+  );
 
-    const review = defaultReviewState();
-    await prisma.card.create({
-      data: {
-        vi: row.vi.trim(),
-        ko: row.ko.trim(),
-        note: row.note?.trim() || null,
-        topicId,
-        review: {
-          create: {
-            ease: review.ease,
-            intervalDays: review.intervalDays,
-            repetitions: review.repetitions,
-            dueAt: review.dueAt,
-            status: review.status,
+  const review = defaultReviewState();
+  const chunkSize = 25;
+  let created = 0;
+
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    await prisma.$transaction(
+      chunk.map((row) => {
+        const topicId = topicCache.get(row.topic.trim());
+        if (!topicId) {
+          throw new Error(`Thiếu chủ đề cho thẻ: ${row.vi}`);
+        }
+        return prisma.card.create({
+          data: {
+            vi: row.vi.trim(),
+            ko: row.ko.trim(),
+            note: row.note?.trim() || null,
+            topicId,
+            review: {
+              create: {
+                ease: review.ease,
+                intervalDays: review.intervalDays,
+                repetitions: review.repetitions,
+                dueAt: review.dueAt,
+                status: review.status,
+              },
+            },
           },
-        },
-      },
-    });
-    created += 1;
+        });
+      }),
+    );
+    created += chunk.length;
   }
 
   revalidatePath("/");

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { reviewCard } from "@/lib/actions";
+import { revalidateStudyRelated, reviewCard } from "@/lib/actions";
 import { haptic } from "@/lib/haptics";
 import { speakKorean } from "@/lib/speak-ko";
 import type { SrsGrade } from "@/lib/srs";
@@ -37,7 +37,7 @@ export function StudySession({
   const [index, setIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [queue, setQueue] = useState(cards);
-  const [pending, startTransition] = useTransition();
+  const [pending, setPending] = useState(false);
   const [topicId, setTopicId] = useState(initialTopicId ?? "");
   const [onlyDue, setOnlyDue] = useState(initialOnlyDue);
   const [direction, setDirection] = useState<"ko-vi" | "vi-ko">(initialDirection);
@@ -45,9 +45,19 @@ export function StudySession({
   const [filtersOpen, setFiltersOpen] = useState(cards.length === 0);
   const [speakMsg, setSpeakMsg] = useState<string | null>(null);
   const [dragX, setDragX] = useState(0);
-  const [dragY, setDragY] = useState(0);
+
   const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const axis = useRef<"h" | "v" | null>(null);
+  const cardSurfaceRef = useRef<HTMLDivElement | null>(null);
   const filterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragXRef = useRef(0);
+  const flippedRef = useRef(flipped);
+  const gradeRef = useRef<(g: SrsGrade) => void>(() => undefined);
+  const indexRef = useRef(index);
+  const queueLenRef = useRef(queue.length);
+  flippedRef.current = flipped;
+  indexRef.current = index;
+  queueLenRef.current = queue.length;
 
   const current = queue[index];
   const studying = !done && !!current;
@@ -56,25 +66,6 @@ export function StudySession({
     if (queue.length === 0) return "0/0";
     return `${Math.min(index + 1, queue.length)}/${queue.length}`;
   }, [index, queue.length]);
-
-  useEffect(() => {
-    // Prefer portrait while studying (no-op if unsupported)
-    type Orient = ScreenOrientation & {
-      lock?: (orientation: string) => Promise<void>;
-      unlock?: () => void;
-    };
-    const orient = screen.orientation as Orient | undefined;
-    if (studying && orient?.lock) {
-      orient.lock("portrait").catch(() => undefined);
-    }
-    return () => {
-      try {
-        orient?.unlock?.();
-      } catch {
-        // ignore
-      }
-    };
-  }, [studying]);
 
   function goStudy(opts: {
     topic?: string;
@@ -94,17 +85,15 @@ export function StudySession({
   function scheduleFilterApply(next: {
     topicId?: string;
     onlyDue?: boolean;
-    direction?: "ko-vi" | "vi-ko";
   }) {
     if (filterTimer.current) clearTimeout(filterTimer.current);
     filterTimer.current = setTimeout(() => {
       goStudy({
         topic: next.topicId ?? topicId,
         due: next.onlyDue ?? onlyDue,
-        dir: next.direction ?? direction,
         remount: true,
       });
-    }, 280);
+    }, 400);
   }
 
   function onSpeak() {
@@ -121,59 +110,108 @@ export function StudySession({
 
   function grade(g: SrsGrade) {
     if (!current || pending) return;
+    const cardId = current.id;
+    const atEnd = indexRef.current >= queueLenRef.current - 1;
+
+    // Optimistic UI: advance immediately, persist in background (Turso latency).
+    setPending(true);
     haptic(g === "again" ? [18, 30, 18] : 14);
-    startTransition(async () => {
-      await reviewCard(current.id, g);
-      setFlipped(false);
-      setDragX(0);
-      setDragY(0);
-      if (index >= queue.length - 1) {
-        setDone(true);
-        setFiltersOpen(true);
-        setQueue((prev) => prev.slice(0, index));
-      } else {
-        setIndex((i) => i + 1);
-      }
+    setFlipped(false);
+    setDragX(0);
+    if (atEnd) {
+      setDone(true);
+      setFiltersOpen(true);
+      setQueue((prev) => prev.slice(0, indexRef.current));
+      void revalidateStudyRelated();
+    } else {
+      setIndex((i) => i + 1);
+    }
+    setPending(false);
+
+    void reviewCard(cardId, g).catch(() => {
+      // Keep UX snappy; failures are rare — user can re-grade later if needed.
     });
   }
 
-  function onTouchStart(e: React.TouchEvent) {
-    const t = e.changedTouches[0];
-    touchStart.current = { x: t.clientX, y: t.clientY };
-  }
+  gradeRef.current = grade;
 
-  function onTouchMove(e: React.TouchEvent) {
-    if (!touchStart.current) return;
-    const t = e.changedTouches[0];
-    setDragX(t.clientX - touchStart.current.x);
-    setDragY(t.clientY - touchStart.current.y);
-  }
-
-  function onTouchEnd() {
-    const dx = dragX;
-    const dy = dragY;
-    touchStart.current = null;
-    setDragX(0);
-    setDragY(0);
-
-    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > SWIPE_FLIP) {
-      // vertical swipe → flip
-      setFlipped((f) => !f);
-      haptic(10);
-      return;
+  useEffect(() => {
+    type Orient = ScreenOrientation & {
+      lock?: (orientation: string) => Promise<void>;
+      unlock?: () => void;
+    };
+    const orient = screen.orientation as Orient | undefined;
+    if (studying && orient?.lock) {
+      orient.lock("portrait").catch(() => undefined);
     }
+    return () => {
+      try {
+        orient?.unlock?.();
+      } catch {
+        // ignore
+      }
+    };
+  }, [studying]);
 
-    if (flipped && Math.abs(dx) > SWIPE_GRADE) {
-      // left = Again, right = Good
-      grade(dx < 0 ? "again" : "good");
-      return;
-    }
+  useEffect(() => {
+    const el = cardSurfaceRef.current;
+    if (!el || !studying) return;
 
-    if (!flipped && Math.abs(dx) > SWIPE_FLIP) {
-      setFlipped(true);
-      haptic(10);
-    }
-  }
+    const onStart = (e: TouchEvent) => {
+      const t = e.changedTouches[0];
+      touchStart.current = { x: t.clientX, y: t.clientY };
+      axis.current = null;
+      dragXRef.current = 0;
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (!touchStart.current) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - touchStart.current.x;
+      const dy = t.clientY - touchStart.current.y;
+      if (!axis.current) {
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+        axis.current = Math.abs(dx) > Math.abs(dy) * 1.15 ? "h" : "v";
+      }
+      if (axis.current === "h") {
+        e.preventDefault();
+        dragXRef.current = dx;
+        setDragX(dx);
+      }
+    };
+
+    const onEnd = () => {
+      const dx = dragXRef.current;
+      const wasH = axis.current === "h";
+      touchStart.current = null;
+      axis.current = null;
+      dragXRef.current = 0;
+      setDragX(0);
+
+      if (!wasH) return;
+
+      if (flippedRef.current && Math.abs(dx) > SWIPE_GRADE) {
+        gradeRef.current(dx < 0 ? "again" : "good");
+        return;
+      }
+
+      if (Math.abs(dx) > SWIPE_FLIP) {
+        setFlipped((f) => !f);
+        haptic(10);
+      }
+    };
+
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, [studying, current?.id]);
 
   const front = current ? (direction === "ko-vi" ? current.ko : current.vi) : "";
   const back = current ? (direction === "ko-vi" ? current.vi : current.ko) : "";
@@ -187,17 +225,19 @@ export function StudySession({
         : flipped
           ? "Good →"
           : "Lật"
-      : Math.abs(dragY) > 24
-        ? "Lật thẻ"
-        : null;
+      : null;
 
   return (
-    <div className={`flex flex-col ${studying ? "min-h-[calc(100dvh-8.5rem)] md:min-h-0" : ""}`}>
+    <div
+      className={`flex flex-col overflow-x-hidden ${
+        studying ? "min-h-[calc(100dvh-8.5rem)] overscroll-y-contain md:min-h-0" : ""
+      }`}
+    >
       <div className="mb-3 flex items-center justify-between gap-2 md:mb-4">
         <div className="min-w-0">
           <h1 className="truncate text-xl font-semibold md:text-3xl">Phiên học SRS</h1>
           <p className="hidden text-muted md:mt-1 md:block">
-            Vuốt dọc/ngang để lật · vuốt trái Again / phải Good khi đã lật.
+            Chạm để lật · vuốt ngang: lật / Again–Good khi đã lật.
           </p>
         </div>
         <button
@@ -248,9 +288,7 @@ export function StudySession({
             <select
               value={direction}
               onChange={(e) => {
-                const v = e.target.value as "ko-vi" | "vi-ko";
-                setDirection(v);
-                scheduleFilterApply({ direction: v });
+                setDirection(e.target.value as "ko-vi" | "vi-ko");
               }}
               className="w-full rounded-md border border-line bg-bg px-3 py-2.5 text-base md:text-sm"
             >
@@ -315,17 +353,7 @@ export function StudySession({
             </p>
           )}
 
-          <div
-            className="relative flex flex-1 touch-pan-y"
-            onTouchStart={onTouchStart}
-            onTouchMove={onTouchMove}
-            onTouchEnd={onTouchEnd}
-            onTouchCancel={() => {
-              touchStart.current = null;
-              setDragX(0);
-              setDragY(0);
-            }}
-          >
+          <div ref={cardSurfaceRef} className="relative flex flex-1 overflow-hidden overscroll-contain">
             {swipeHint && (
               <p className="pointer-events-none absolute inset-x-0 top-2 z-10 text-center text-sm font-medium text-accent">
                 {swipeHint}
@@ -338,12 +366,12 @@ export function StudySession({
                 haptic(8);
               }}
               style={{
-                transform: `translate(${dragX * 0.35}px, ${dragY * 0.2}px) rotate(${dragX * 0.02}deg)`,
+                transform: `translate3d(${dragX * 0.35}px,0,0) rotate(${dragX * 0.02}deg)`,
               }}
-              className="animate-flip-in study-card flex min-h-[42vh] w-full flex-col items-center justify-center rounded-2xl border border-line bg-card px-5 py-12 text-center shadow-sm transition-[border-color] hover:border-accent md:min-h-[280px] md:py-16"
+              className="animate-flip-in study-card flex min-h-[42vh] w-full flex-col items-center justify-center rounded-2xl border border-line bg-card px-5 py-12 text-center shadow-sm transition-[border-color] will-change-transform hover:border-accent md:min-h-[280px] md:py-16"
             >
               <p className="text-xs uppercase tracking-[0.2em] text-muted">
-                {flipped ? "Mặt sau" : "Mặt trước"} · chạm / vuốt để lật
+                {flipped ? "Mặt sau" : "Mặt trước"} · chạm để lật · vuốt ngang
               </p>
               <p
                 className={`mt-4 text-4xl font-semibold leading-tight sm:text-5xl ${
